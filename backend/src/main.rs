@@ -10,6 +10,21 @@ type DbState = Arc<Mutex<Connection>>;
 
 const SECRET_KEY: &str = "TODO: HANDLE SECRET KEY";
 
+/// The error type used throughout the binary
+#[derive(Debug, PartialEq)]
+enum Error {
+    DatabaseErr(rusqlite::Error),
+    /// Error returned when an attempt is made to create a new user with a real
+    /// name or email address that already exists in the database.
+    UserAlreadyExists
+}
+
+impl From<rusqlite::Error> for Error {
+    fn from(err: rusqlite::Error) -> Self {
+        Error::DatabaseErr(err)
+    }
+}
+
 /// Representation of a user in the database.
 #[derive(Debug, PartialEq)]
 struct User {
@@ -54,7 +69,7 @@ impl User {
     ///
     /// Errors if the user cannot be created.
     // TODO: error if user already exists with same realname or email
-    fn create_new(conn: &Connection, rinfo: &RegisterInfo) -> SqliteResult<()> {
+    fn create_new(conn: &Connection, rinfo: &RegisterInfo) -> Result<(), Error> {
         let mut hasher = Hasher::default();
         let hash = hasher
             .with_password(&rinfo.password)
@@ -71,8 +86,7 @@ impl User {
     }
 
     /// Loads the user specified by the given ID from the database.
-    // TODO: what happens if invalid id is passed in?
-    fn load_from(conn: &Connection, user_id: u64) -> SqliteResult<Self> {
+    fn load_from(conn: &Connection, user_id: u64) -> Result<Self, Error> {
         Ok(conn.query_row(
             &("SELECT user_id, hash, email, created_at, display_name, real_name FROM user WHERE user_id='".to_string() + &user_id.to_string() + "'"),
             params![],
@@ -100,7 +114,7 @@ struct RegisterInfo {
     real_name: String
 }
 
-fn main() -> SqliteResult<()> {
+fn main() -> Result<(), Error> {
     let conn = Connection::open_in_memory()?;
     User::create_table(&conn)?;
 
@@ -137,7 +151,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_user_database() -> SqliteResult<()> {
+    fn test_user_database() -> Result<(), Error> {
         let conn = Connection::open_in_memory()?;
         User::create_table(&conn)?;
 
@@ -163,7 +177,7 @@ mod test {
     }
 
     #[test]
-    fn create_user_from_info() -> SqliteResult<()> {
+    fn create_user_from_info() -> Result<(), Error> {
         let conn = Connection::open_in_memory()?;
         User::create_table(&conn)?;
         let password = "myAmazingPassw0rd!".to_string();
@@ -188,6 +202,18 @@ mod test {
 
         assert_eq!(is_valid, true);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_invalid_id() -> Result<(), Error> {
+        let conn = Connection::open_in_memory()?;
+        User::create_table(&conn)?;
+
+        let res = User::load_from(&conn, 1);
+
+        // error should be "QueryReturnedNoRows"
+        assert_eq!(res, Err(Error::DatabaseErr(rusqlite::Error::QueryReturnedNoRows)));
         Ok(())
     }
 }
