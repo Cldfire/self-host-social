@@ -2,7 +2,6 @@ use argonautica::{Hasher, Verifier};
 use chrono::{NaiveDateTime, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
 use serde_derive::{Deserialize, Serialize};
-use warp::{self, path, Filter};
 
 use std::sync::{Arc, Mutex};
 
@@ -119,29 +118,6 @@ fn main() -> Result<(), Error> {
     User::create_table(&conn)?;
 
     let db_state = Arc::new(Mutex::new(conn));
-
-    // GET /hello/warp => 200 OK with body "Hello, warp!"
-    // let register = path!("register")
-    //     .and(warp::body::content_length_limit(1024 * 8))
-    //     .and(warp::body::json())
-    //     .map(|info: RegisterInfo| {
-    //         // TODO: handle erroring if user tries to sign up with an email or
-    //         // real name that already exists
-
-    //         // TODO: all usage of the database is blocking, this is in an async
-    //         // context so that is bad
-    //         //
-    //         // not a huge deal since this webserver will never be hit by many requests
-    //         // at the same time but should still fix
-
-    //         // TODO: password hashing is also blocking and should be handled better
-
-    //         let state_clone = db_state.clone();
-    //         let conn = state_clone.lock().unwrap();
-    //     });
-
-    // warp::serve(register)
-    //     .run(([127, 0, 0, 1], 1111));
 
     Ok(())
 }
