@@ -1,12 +1,7 @@
 <script>
     import { Link } from 'svero';
 
-    import { signedIn } from './stores.js';
-
-    let signedInValue;
-    const unsubscribe = signedIn.subscribe(value => {
-		signedInValue = value;
-    });
+    import { signedIn, userId } from './stores.js';
 
     async function logOut() {
         const response = await fetch(
@@ -18,6 +13,7 @@
         );
         if (response.status === 200) {
             signedIn.set(false);
+            userId.set(-1);
         } else {
             // TODO: handle potential errors / issues
             // should reply with json payload
@@ -26,9 +22,10 @@
     }
 </script>
 
-{#if signedInValue}
+{#if $signedIn}
     <p>Hi! You are signed in.</p>
 
+    <Link href="user/{$userId}">View Profile</Link>
     <button on:click="{logOut}">Log Out</button>
 {:else}
     <p>You are not signed in.</p>

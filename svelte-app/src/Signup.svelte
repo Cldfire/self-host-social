@@ -1,7 +1,7 @@
 <script>
     import { navigateTo } from 'svero';
 
-    import { signedIn } from './stores.js';
+    import { signedIn, userId } from './stores.js';
 
     async function handleSubmit(event) {
         if(!event.target.checkValidity()) {
@@ -25,8 +25,11 @@
                 })
             }
         );
+        const userInfo = await response.json();
+
         if (response.status === 201) {
             signedIn.set(true);
+            userId.set(userInfo.user_id);
             navigateTo('/')
         } else {
             // TODO: handle potential errors / issues

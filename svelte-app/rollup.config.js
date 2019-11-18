@@ -37,10 +37,6 @@ export default {
 		}),
 		commonjs(),
 
-		// In dev mode, call `npm run start:dev` once
-		// the bundle has been generated
-		!production && rollup_start_dev,
-
 		// Watch the `public` directory and refresh the
 		// browser on changes when not in production
 		!production && livereload('public'),

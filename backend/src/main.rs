@@ -4,10 +4,10 @@
 
 use rocket::outcome::Outcome;
 use rocket::http::Status;
-use rocket::response::NamedFile;
+use rocket::response::{Content, NamedFile};
 use rocket::response::status;
 use rocket::request::{self, FromRequest, Request};
-use rocket::http::{Cookie, Cookies};
+use rocket::http::{Cookie, Cookies, ContentType};
 use rocket::State;
 use rocket_contrib::json::{Json, JsonValue};
 use rocket_contrib::serve::StaticFiles;
@@ -16,6 +16,8 @@ use argonautica::{Hasher, Verifier};
 use chrono::{NaiveDateTime, Utc};
 use rusqlite::{params, Connection};
 use serde_derive::{Deserialize, Serialize};
+
+use identicon_rs::{Identicon, ImageType};
 
 use std::sync::Mutex;
 use std::path::Path;
@@ -73,7 +75,9 @@ struct User {
     /// The user's real name
     ///
     /// This name can also change (obviously) but should be modified very rarely.
-    real_name: String
+    real_name: String,
+    // The bytes of the PNG-encoded profile picture
+    profile_pic: Vec<u8>
 }
 
 impl<'a, 'r> FromRequest<'a, 'r> for User {
@@ -108,7 +112,8 @@ impl User {
                     email                   TEXT NOT NULL,
                     created_at              TEXT NOT NULL,
                     display_name            TEXT NOT NULL,
-                    real_name               TEXT NOT NULL
+                    real_name               TEXT NOT NULL,
+                    profile_pic             BLOB NOT NULL
                     )",
             params![],
         ).map(|_| ())?)
@@ -127,17 +132,20 @@ impl User {
             .unwrap();
         let created_at = Utc::now().naive_utc();
 
+        let identicon = Identicon::new_default(&(rinfo.display_name.clone() + &rinfo.email + &rinfo.real_name));
+        let data = identicon.export_file_data(ImageType::PNG);
+
         Ok(conn.execute(
-            "INSERT INTO user (hash, email, created_at, display_name, real_name)
-                    VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![hash, rinfo.email, created_at, rinfo.display_name, rinfo.real_name],
+            "INSERT INTO user (hash, email, created_at, display_name, real_name, profile_pic)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![hash, rinfo.email, created_at, rinfo.display_name, rinfo.real_name, data],
         ).map(|_| ())?)
     }
 
     /// Loads the user specified by the given ID from the database.
-    fn load_id(conn: &Connection, user_id: u64) -> Result<Self, Error> {
+    fn load_id(conn: &Connection, user_id: u32) -> Result<Self, Error> {
         Ok(conn.query_row(
-            &("SELECT user_id, hash, email, created_at, display_name, real_name FROM user WHERE user_id='".to_string() + &user_id.to_string() + "'"),
+            &("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE user_id='".to_string() + &user_id.to_string() + "'"),
             params![],
             |row| {
                 Ok(User {
@@ -146,7 +154,8 @@ impl User {
                     email: row.get(2)?,
                     created_at: row.get(3)?,
                     display_name: row.get(4)?,
-                    real_name: row.get(5)?
+                    real_name: row.get(5)?,
+                    profile_pic: row.get(6)?
                 })
             }
         )?)
@@ -155,7 +164,7 @@ impl User {
     /// Loads the user specified by the given email from the database
     fn load_email(conn: &Connection, email: &str) -> Result<Self, Error> {
         Ok(conn.query_row(
-            &("SELECT user_id, hash, email, created_at, display_name, real_name FROM user WHERE email='".to_string() + email + "'"),
+            &("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE email='".to_string() + email + "'"),
             params![],
             |row| {
                 Ok(User {
@@ -164,8 +173,27 @@ impl User {
                     email: row.get(2)?,
                     created_at: row.get(3)?,
                     display_name: row.get(4)?,
-                    real_name: row.get(5)?
+                    real_name: row.get(5)?,
+                    profile_pic: row.get(6)?
                 })
+            }
+        )?)
+    }
+
+    /// Returns a buffer with the profile pic for the user specified by the given id
+    // TODO: right now images are loaded into memory in their entirety from the database
+    //
+    // this might not be an issue as this server will never deal with large images buuuut
+    // it might be nice to fix regardless
+    //
+    // might be better to store images outside the database in the filesystem to avoid
+    // fighting with the sqlite API
+    fn get_profile_pic(conn: &Connection, user_id: u32) -> Result<Vec<u8>, Error> {
+        Ok(conn.query_row(
+            &("SELECT profile_pic FROM user WHERE user_id='".to_string() + &user_id.to_string() + "'"),
+            params![],
+            |row| {
+                Ok(row.get(0)?)
             }
         )?)
     }
@@ -205,7 +233,7 @@ struct LoginInfo {
 // TODO: reorganize this whole file so intent is clearer
 #[derive(Serialize, Deserialize)]
 struct UserInfo {
-    email: String,
+    user_id: u32,
     display_name: String,
     real_name: String
 }
@@ -213,35 +241,46 @@ struct UserInfo {
 impl From<User> for UserInfo {
     fn from(user: User) -> Self {
         Self {
-            email: user.email,
+            user_id: user.user_id,
             display_name: user.display_name,
             real_name: user.real_name
         }
     }
 }
 
+/// Returns the profile picture for the requested user id
+#[get("/profile-pic/<req_user_id>")]
+fn profile_pic(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Content<Vec<u8>>, Error> {
+    let conn = db.lock().unwrap();
+    Ok(Content(ContentType::PNG, User::get_profile_pic(&conn, req_user_id)?))
+}
+
 /// Route used to create a new user
 // TODO: right now my error type does not implement responder so returning an error
 // here returns a 500 to the client and logs the error to the console
 #[post("/signup", format = "json", data = "<reg_info>")]
-fn signup(mut cookies: Cookies, reg_info: Json<RegisterInfo>, db: State<DbConn>) -> Result<status::Created<()>, Error> {
+fn signup(mut cookies: Cookies, reg_info: Json<RegisterInfo>, db: State<DbConn>) -> Result<status::Created<Json<UserInfo>>, Error> {
     let conn = db.lock().unwrap();
     User::create_new(&conn, &reg_info)?;
     // we need to load the user right back from the db so we have the correct user_id
     let user = User::load_email(&conn, &reg_info.email)?;
 
     cookies.add_private(Cookie::new("user_id", user.user_id.to_string()));
-    Ok(status::Created("".to_string(), None))
+    Ok(status::Created("".to_string(), Some(Json(user.into()))))
 }
 
+// TODO: right now logging in will quickly fail if a user enters an email that doesn't
+// exist, making it trivial to probe for whether or not an account exists on the server
+//
+// should fix that
 #[post("/login", format = "json", data = "<login_info>")]
-fn login(mut cookies: Cookies, login_info: Json<LoginInfo>, db: State<DbConn>) -> Result<status::Accepted<()>, Error> {
+fn login(mut cookies: Cookies, login_info: Json<LoginInfo>, db: State<DbConn>) -> Result<status::Accepted<Json<UserInfo>>, Error> {
     let conn = db.lock().unwrap();
     let user = User::load_email(&conn, &login_info.email)?;
 
     if user.auth(&login_info)? {
         cookies.add_private(Cookie::new("user_id", user.user_id.to_string()));
-        Ok(status::Accepted(None))
+        Ok(status::Accepted(Some(Json(user.into()))))
     } else {
         Err(Error::LoginFailed)
     }
@@ -286,7 +325,7 @@ fn rocket() -> Result<rocket::Rocket, Error> {
             .manage(Mutex::new(conn))
             // TODO: bundle static files into binary for easy deploy?
             .mount("/", StaticFiles::from(concat!(env!("CARGO_MANIFEST_DIR"), "/svelte-app/public")))
-            .mount("/api", routes![signup, login, logout, me, me_authed])
+            .mount("/api", routes![signup, login, logout, me, me_authed, profile_pic])
             .register(catchers![not_found])
     )
 }
@@ -306,18 +345,26 @@ mod test {
         let conn = Connection::open_in_memory()?;
         User::create_table(&conn)?;
 
+        let email = String::from("some_email@gmail.com");
+        let display_name = String::from("display_name");
+        let real_name = String::from("real_name");
+
+        let identicon = Identicon::new_default(&(display_name.clone() + &email + &real_name));
+        let data = identicon.export_file_data(ImageType::PNG);
+
         let me = User {
             user_id: 1,
             hash: "kalnfdanf".to_string(),
-            email: "some_email@gmail.com".to_string(),
+            email,
             created_at: Utc::now().naive_utc(),
-            display_name: "display_name".to_string(),
-            real_name: "real_name".to_string()
+            display_name,
+            real_name,
+            profile_pic: data
         };
         conn.execute(
-            "INSERT INTO user (user_id, hash, email, created_at, display_name, real_name)
-                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![me.user_id, me.hash, me.email, me.created_at, me.display_name, me.real_name],
+            "INSERT INTO user (user_id, hash, email, created_at, display_name, real_name, profile_pic)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![me.user_id, me.hash, me.email, me.created_at, me.display_name, me.real_name, me.profile_pic],
         )?;
 
         let user = User::load_id(&conn, 1)?;
@@ -325,6 +372,9 @@ mod test {
 
         let user = User::load_email(&conn, &me.email)?;
         assert_eq!(&user, &me);
+
+        let profile_pic = User::get_profile_pic(&conn, 1)?;
+        assert_eq!(&me.profile_pic, &profile_pic);
 
         Ok(())
     }

@@ -5,7 +5,8 @@
     import Index from './Index.svelte';
     import Signup from './Signup.svelte';
     import Login from './Login.svelte';
-    import { signedIn } from './stores.js';
+    import UserProfile from './UserProfile.svelte';
+    import { signedIn, userId } from './stores.js';
 
     onMount(async () => {
         const response = await fetch(
@@ -15,9 +16,11 @@
                 credentials: 'same-origin'
             }
         );
+        const userInfo = await response.json();
 
         if (response.status === 200) {
             signedIn.set(true);
+            userId.set(userInfo.user_id);
         }
     });
 </script>
@@ -26,6 +29,7 @@
     <Route exact path="/" component={Index}/>
     <Route path="/signup" component={Signup}/>
     <Route path="/login" component={Login}/>
+    <Route path="/user/:userId" component={UserProfile}/>
     <!-- TODO: Figure out how to set up a wildcard path. Right now entering a
     non-existent path results in a network request, but that shouldn't occur -->
 </Router>

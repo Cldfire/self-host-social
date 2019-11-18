@@ -4,9 +4,9 @@ A project that aims to implement a small, self-contained, self-hostable social n
 
 ## Frontend
 
-The frontend is in `svelte-app` and is written in JS with the Svelte 3 framework. Run `npm install` and then `npm build`.
+The frontend is in `svelte-app` and is written in JS with the Svelte 3 framework. Run `npm install` and then `npm run watch`.
 
-I still need to set up live reloading w/ the Rust backend, so as of right now you'll have to re-run `npm build` after every change.
+(Make sure you also start the backend seperately. Live reload should be working.)
 
 ## Backend
 
