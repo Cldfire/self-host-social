@@ -11,7 +11,7 @@
                 credentials: 'same-origin'
             }
         );
-        if (response.status === 200) {
+        if (response.ok) {
             signedIn.set(false);
             userId.set(-1);
         } else {

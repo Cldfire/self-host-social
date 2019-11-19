@@ -248,6 +248,15 @@ impl From<User> for UserInfo {
     }
 }
 
+/// Returns information about the requested user id
+#[get("/user-info/<req_user_id>")]
+fn user_info(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Json<UserInfo>, Error> {
+    let conn = db.lock().unwrap();
+    let user = User::load_id(&conn, req_user_id)?;
+
+    Ok(Json(user.into()))
+}
+
 /// Returns the profile picture for the requested user id
 #[get("/profile-pic/<req_user_id>")]
 fn profile_pic(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Content<Vec<u8>>, Error> {
@@ -303,6 +312,7 @@ fn me() -> status::Custom<()> {
 }
 
 /// A "catch-all" to redirect path requests to the index since we are building a SPA
+// TODO: perhaps we should still return a 404 for anything that's not a path?
 #[catch(404)]
 fn not_found() -> NamedFile {
     NamedFile::open(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/svelte-app/public/index.html"))).unwrap()
@@ -325,7 +335,7 @@ fn rocket() -> Result<rocket::Rocket, Error> {
             .manage(Mutex::new(conn))
             // TODO: bundle static files into binary for easy deploy?
             .mount("/", StaticFiles::from(concat!(env!("CARGO_MANIFEST_DIR"), "/svelte-app/public")))
-            .mount("/api", routes![signup, login, logout, me, me_authed, profile_pic])
+            .mount("/api", routes![signup, login, logout, me, me_authed, profile_pic, user_info])
             .register(catchers![not_found])
     )
 }

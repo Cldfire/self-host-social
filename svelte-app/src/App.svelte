@@ -18,7 +18,7 @@
         );
         const userInfo = await response.json();
 
-        if (response.status === 200) {
+        if (response.ok) {
             signedIn.set(true);
             userId.set(userInfo.user_id);
         }

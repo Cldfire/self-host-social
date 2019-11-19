@@ -27,7 +27,7 @@
         );
         const userInfo = await response.json();
 
-        if (response.status === 201) {
+        if (response.ok) {
             signedIn.set(true);
             userId.set(userInfo.user_id);
             navigateTo('/')
