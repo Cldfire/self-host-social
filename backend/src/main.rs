@@ -582,13 +582,14 @@ mod test {
         create_dummy_user(&conn, email.clone(), password.clone())?;
 
         let user = User::load_id(&conn, 1)?;
-        assert_eq!(user.auth(&LoginInfo { email, password })?, true);
+        assert_eq!(user.auth(&LoginInfo { email, password: password.clone() })?, true);
+        assert_eq!(user.auth(&LoginInfo { email: "adifferentemail@gmail.com".to_string(), password })?, false);
 
         Ok(())
     }
 
     #[test]
-    fn test_load_invalid_id() -> Result<(), Error> {
+    fn load_invalid_id() -> Result<(), Error> {
         let conn = Connection::open_in_memory()?;
         init_database(&conn)?;
 
@@ -600,7 +601,7 @@ mod test {
     }
 
     #[test]
-    fn test_create_post_set_image() -> Result<(), Error> {
+    fn create_post_set_image() -> Result<(), Error> {
         let conn = Connection::open_in_memory()?;
         init_database(&conn)?;
 
