@@ -203,9 +203,13 @@ impl User {
     }
 
     /// Returns true if this user matches the given `LoginInfo`
+    ///
+    /// This means that the emails are equivalent and the password the user
+    /// entered hashed to the correct value.
     fn auth(&self, login_info: &LoginInfo) -> Result<bool, Error> {
         let mut verifier = Verifier::default();
         Ok(
+            login_info.email == self.email &&
             verifier
                 .with_hash(&self.hash)
                 .with_password(&login_info.password)
@@ -518,6 +522,17 @@ mod test {
         user_id_cookie(&response)
     }
 
+    fn create_dummy_user(conn: &Connection, email: String, password: String) -> Result<(), Error> {
+        let rinfo = RegisterInfo {
+            email,
+            password,
+            display_name: "dummy".to_string(),
+            real_name: "Some Dummy".to_string()
+        };
+
+        User::create_new(&conn, &rinfo)
+    }
+
     #[test]
     fn test_user_database() -> Result<(), Error> {
         let conn = Connection::open_in_memory()?;
@@ -563,17 +578,11 @@ mod test {
         init_database(&conn)?;
 
         let password = "myAmazingPassw0rd!".to_string();
+        let email = "some_email@gmail.com".to_string();
+        create_dummy_user(&conn, email.clone(), password.clone())?;
 
-        let rinfo = RegisterInfo {
-            email: "some_email@gmail.com".to_string(),
-            password: password.clone(),
-            display_name: "Cldfire".to_string(),
-            real_name: "Some Person".to_string()
-        };
-
-        User::create_new(&conn, &rinfo)?;
         let user = User::load_id(&conn, 1)?;
-        assert_eq!(user.auth(&LoginInfo { email: "".to_string(), password })?, true);
+        assert_eq!(user.auth(&LoginInfo { email, password })?, true);
 
         Ok(())
     }
@@ -595,18 +604,9 @@ mod test {
         let conn = Connection::open_in_memory()?;
         init_database(&conn)?;
 
-        // TODO: write a function to create a test user to avoid the copy + paste
         let email = "some_email@gmail.com".to_string();
         let password = "myAmazingPassw0rd!".to_string();
-
-        let rinfo = RegisterInfo {
-            email: email.clone(),
-            password: password.clone(),
-            display_name: "Cldfire".to_string(),
-            real_name: "Some Person".to_string()
-        };
-
-        User::create_new(&conn, &rinfo)?;
+        create_dummy_user(&conn, email.clone(), password.clone())?;
 
         let client = Client::new(rocket(conn)?).unwrap();
         let db = client.rocket().state::<DbConn>().unwrap();
