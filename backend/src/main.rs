@@ -149,8 +149,8 @@ impl User {
     /// Loads the user specified by the given id from the database.
     fn load_id(conn: &Connection, user_id: u32) -> Result<Self, Error> {
         Ok(conn.query_row(
-            &("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE user_id='".to_string() + &user_id.to_string() + "'"),
-            params![],
+            &("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE user_id=?1"),
+            params![user_id],
             |row| {
                 Ok(User {
                     user_id: row.get(0)?,
@@ -168,8 +168,8 @@ impl User {
     /// Loads the user specified by the given email from the database
     fn load_email(conn: &Connection, email: &str) -> Result<Self, Error> {
         Ok(conn.query_row(
-            &("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE email='".to_string() + email + "'"),
-            params![],
+            &("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE email=?1"),
+            params![email],
             |row| {
                 Ok(User {
                     user_id: row.get(0)?,
@@ -194,8 +194,8 @@ impl User {
     // fighting with the sqlite API
     fn get_profile_pic(conn: &Connection, user_id: u32) -> Result<Vec<u8>, Error> {
         Ok(conn.query_row(
-            &("SELECT profile_pic FROM user WHERE user_id='".to_string() + &user_id.to_string() + "'"),
-            params![],
+            &("SELECT profile_pic FROM user WHERE user_id=?1"),
+            params![user_id],
             |row| {
                 Ok(row.get(0)?)
             }
@@ -267,12 +267,10 @@ impl Post {
     }
 
     /// Loads the post specified by the given id from the database.
-    // TODO: pretty sure I can get rid of the string concat and use the params![]
-    // instead in all of these
     fn load_id(conn: &Connection, post_id: u32) -> Result<Self, Error> {
         Ok(conn.query_row(
-            &("SELECT id, body, created_at, image, user_id FROM post WHERE id='".to_string() + &post_id.to_string() + "'"),
-            params![],
+            &("SELECT id, body, created_at, image, user_id FROM post WHERE id=?1"),
+            params![post_id],
             |row| {
                 Ok(Post {
                     id: row.get(0)?,
