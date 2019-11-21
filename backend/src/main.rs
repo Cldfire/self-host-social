@@ -582,8 +582,10 @@ mod test {
         create_dummy_user(&conn, email.clone(), password.clone())?;
 
         let user = User::load_id(&conn, 1)?;
-        assert_eq!(user.auth(&LoginInfo { email, password: password.clone() })?, true);
+        assert_eq!(user.auth(&LoginInfo { email: email.clone(), password: password.clone() })?, true);
         assert_eq!(user.auth(&LoginInfo { email: "adifferentemail@gmail.com".to_string(), password })?, false);
+        assert_eq!(user.auth(&LoginInfo { email: email.clone(), password: "thisisthewrongpassword".to_string() })?, false);
+        assert_eq!(user.auth(&LoginInfo { email: "anotheremail@gmail.com".to_string(), password: "83quhejwdknas".to_string() })?, false);
 
         Ok(())
     }
