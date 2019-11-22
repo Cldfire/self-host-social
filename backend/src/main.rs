@@ -304,17 +304,21 @@ impl Post {
     /// If a user id is provided, the posts will be the recent posts from that
     /// user only. If no id is provided then the most recent posts globally
     /// will be returned.
+    // TODO: write a test to ensure that this fn works with and without a user id
     fn load_recents_info(conn: &Connection, num: u32, user_id: Option<u32>) -> Result<Vec<PostDetails>, Error> {
         let mut stmt;
+        let params;
         let user_id = user_id.unwrap_or(0);
         
         if user_id > 0 {
             stmt = conn.prepare("SELECT id, body, created_at, user_id FROM post WHERE user_id=?2 ORDER BY id DESC LIMIT ?1")?;
+            params = params![num, user_id].to_vec();
         } else {
             stmt = conn.prepare("SELECT id, body, created_at, user_id FROM post ORDER BY id DESC LIMIT ?1")?;
+            params = params![num].to_vec();
         }
         
-        let post_iter = stmt.query_map(params![num, user_id], |row| {
+        let post_iter = stmt.query_map(params, |row| {
             Ok(PostDetails {
                 id: row.get(0)?,
                 body: row.get(1)?,
@@ -396,10 +400,12 @@ fn user_info(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Json<Us
 }
 
 /// Returns details about recent n recent posts for the given user id
-#[get("/recent-posts/<req_user_id>/<n>")]
-fn recent_posts(_user: User, db: State<DbConn>, req_user_id: u32, n: u32) -> Result<Json<Vec<PostDetails>>, Error> {
+// TODO: use query parameters more, they're more idiomatic
+// also show up nicer in the network panel
+#[get("/recent-posts?<req_user_id>&<n>")]
+fn recent_posts(_user: User, db: State<DbConn>, req_user_id: Option<u32>, n: u32) -> Result<Json<Vec<PostDetails>>, Error> {
     let conn = db.lock().unwrap();
-    let posts = Post::load_recents_info(&conn, n, Some(req_user_id))?;
+    let posts = Post::load_recents_info(&conn, n, req_user_id)?;
 
     Ok(Json(posts))
 }
@@ -412,6 +418,7 @@ fn profile_pic(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Conte
 }
 
 /// Returns the image for the requested post id
+// TODO: figure out how to get the browser to cache this stuff properly
 #[get("/post-image/<post_id>")]
 fn post_image(_user: User, db: State<DbConn>, post_id: u32) -> Result<Content<Vec<u8>>, Error> {
     let conn = db.lock().unwrap();
@@ -532,6 +539,8 @@ fn rocket(conn: Connection) -> Result<rocket::Rocket, Error> {
         rocket::ignite()
             .manage(Mutex::new(conn))
             // TODO: bundle static files into binary for easy deploy?
+            // TODO: make a crate to manage boilerplate for serving static files from
+            // a hashmap generated at compile time?
             .mount("/", StaticFiles::from(concat!(env!("CARGO_MANIFEST_DIR"), "/svelte-app/public")))
             .mount("/api", routes![
                 signup,

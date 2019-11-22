@@ -1,9 +1,12 @@
 <script>
     import Post from './Post.svelte'
 
+    import { loadRecentPosts } from './utils.js'
+
     export let router;
     let userInfoPromise = loadUserInfo();
-    let recentPostsPromise = loadRecentPosts();
+    // TODO: load more than the last 10 posts
+    let recentPostsPromise = loadRecentPosts(router.params.userId, 10);
 
     async function loadUserInfo() {
         const response = await fetch(
@@ -21,21 +24,6 @@
                 realName: json.real_name,
                 displayName: json.display_name
             };
-        }
-    }
-
-    async function loadRecentPosts() {
-        const response = await fetch(
-            // TODO: load more than the last 10 posts
-            "/api/recent-posts/" + router.params.userId + "/10",
-            {
-                method: 'GET',
-                credentials: 'same-origin'
-            }
-        );
-
-        if (response.ok) {
-            return response.json();
         }
     }
 </script>
