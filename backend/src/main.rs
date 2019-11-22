@@ -149,7 +149,7 @@ impl User {
     /// Loads the user specified by the given id from the database.
     fn load_id(conn: &Connection, user_id: u32) -> Result<Self, Error> {
         Ok(conn.query_row(
-            &("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE user_id=?1"),
+            "SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE user_id=?1",
             params![user_id],
             |row| {
                 Ok(User {
@@ -168,7 +168,7 @@ impl User {
     /// Loads the user specified by the given email from the database
     fn load_email(conn: &Connection, email: &str) -> Result<Self, Error> {
         Ok(conn.query_row(
-            &("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE email=?1"),
+            "SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user WHERE email=?1",
             params![email],
             |row| {
                 Ok(User {
@@ -194,7 +194,7 @@ impl User {
     // fighting with the sqlite API
     fn get_profile_pic(conn: &Connection, user_id: u32) -> Result<Vec<u8>, Error> {
         Ok(conn.query_row(
-            &("SELECT profile_pic FROM user WHERE user_id=?1"),
+            "SELECT profile_pic FROM user WHERE user_id=?1",
             params![user_id],
             |row| {
                 Ok(row.get(0)?)
@@ -270,10 +270,21 @@ impl Post {
         ).map(|_| ())?)
     }
 
+    // Get the image for the specified post id
+    fn get_image(conn: &Connection, post_id: u32) -> Result<Vec<u8>, Error> {
+        Ok(conn.query_row(
+            "SELECT image FROM post WHERE id=?1",
+            params![post_id],
+            |row| {
+                Ok(row.get(0)?)
+            }
+        )?)
+    }
+
     /// Loads the post specified by the given id from the database.
     fn load_id(conn: &Connection, post_id: u32) -> Result<Self, Error> {
         Ok(conn.query_row(
-            &("SELECT id, body, created_at, image, user_id FROM post WHERE id=?1"),
+            "SELECT id, body, created_at, image, user_id FROM post WHERE id=?1",
             params![post_id],
             |row| {
                 Ok(Post {
@@ -285,6 +296,23 @@ impl Post {
                 })
             }
         )?)
+    }
+
+    /// Load `num` number of the most recent posts.
+    fn load_recents_info(conn: &Connection, num: u32) -> Result<Vec<PostDetails>, Error> {
+        let mut stmt = conn.prepare("SELECT body, created_at, user_id FROM post ORDER BY id DESC LIMIT ?1")?;
+        let post_iter = stmt.query_map(params![num], |row| {
+            Ok(PostDetails {
+                body: row.get(0)?,
+                created_at: row.get::<_, NaiveDateTime>(1)?.timestamp(),
+                user_id: row.get(2)?
+            })
+        })?;
+
+        post_iter.map(|res| match res {
+            Ok(v) => Ok(v),
+            Err(e) => Err(Error::from(e))
+        }).collect()
     }
 }
 
@@ -301,6 +329,14 @@ struct RegisterInfo {
 #[derive(Serialize, Deserialize)]
 struct PostInfo {
     body: String
+}
+
+/// Web client receives this to display posts
+#[derive(Serialize, Deserialize)]
+struct PostDetails {
+    body: String,
+    created_at: i64,
+    user_id: u32
 }
 
 /// Web client receives this after creating a post
