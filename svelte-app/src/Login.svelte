@@ -13,7 +13,6 @@
             {
                 method: 'POST',
                 headers: {
-                    'Accept': 'application/json',
                     'Content-Type': 'application/json'
                 },
                 credentials: 'same-origin',
@@ -23,9 +22,10 @@
                 })
             }
         );
-        const userInfo = await response.json();
 
         if (response.ok) {
+            const userInfo = await response.json();
+
             signedIn.set(true);
             userId.set(userInfo.user_id);
             navigateTo('/')

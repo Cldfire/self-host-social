@@ -26,6 +26,7 @@
     <p>Hi! You are signed in.</p>
 
     <Link href="user/{$userId}">View Profile</Link>
+    <Link href="new-post">New Post</Link>
     <button on:click="{logOut}">Log Out</button>
 {:else}
     <p>You are not signed in.</p>

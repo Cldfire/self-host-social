@@ -1,9 +1,9 @@
 <script>
-    import { onMount } from 'svelte';
-    import { navigateTo } from 'svero';
+    import Post from './Post.svelte'
 
     export let router;
     let userInfoPromise = loadUserInfo();
+    let recentPostsPromise = loadRecentPosts();
 
     async function loadUserInfo() {
         const response = await fetch(
@@ -13,13 +13,29 @@
                 credentials: 'same-origin'
             }
         );
-        const json = await response.json();
 
         if (response.ok) {
+            const json = await response.json();
+
             return {
                 realName: json.real_name,
                 displayName: json.display_name
             };
+        }
+    }
+
+    async function loadRecentPosts() {
+        const response = await fetch(
+            // TODO: load more than the last 10 posts
+            "/api/recent-posts/" + router.params.userId + "/10",
+            {
+                method: 'GET',
+                credentials: 'same-origin'
+            }
+        );
+
+        if (response.ok) {
+            return response.json();
         }
     }
 </script>
@@ -30,4 +46,10 @@
 
     <h3>{userInfo.displayName}</h3>
     <p>{userInfo.realName}</p>
+
+    {#await recentPostsPromise then recentPosts}
+        {#each recentPosts as post}
+            <Post postInfo={post}/>
+        {/each}
+    {/await}
 {/await}

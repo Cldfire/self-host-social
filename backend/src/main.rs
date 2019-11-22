@@ -127,6 +127,7 @@ impl User {
     ///
     /// Errors if the user cannot be created.
     // TODO: error if user already exists with same realname or email
+    // TODO: validate email server-side
     fn create_new(conn: &Connection, rinfo: &RegisterInfo) -> Result<(), Error> {
         let mut hasher = Hasher::default();
         let hash = hasher
@@ -299,13 +300,26 @@ impl Post {
     }
 
     /// Load `num` number of the most recent posts.
-    fn load_recents_info(conn: &Connection, num: u32) -> Result<Vec<PostDetails>, Error> {
-        let mut stmt = conn.prepare("SELECT body, created_at, user_id FROM post ORDER BY id DESC LIMIT ?1")?;
-        let post_iter = stmt.query_map(params![num], |row| {
+    /// 
+    /// If a user id is provided, the posts will be the recent posts from that
+    /// user only. If no id is provided then the most recent posts globally
+    /// will be returned.
+    fn load_recents_info(conn: &Connection, num: u32, user_id: Option<u32>) -> Result<Vec<PostDetails>, Error> {
+        let mut stmt;
+        let user_id = user_id.unwrap_or(0);
+        
+        if user_id > 0 {
+            stmt = conn.prepare("SELECT id, body, created_at, user_id FROM post WHERE user_id=?2 ORDER BY id DESC LIMIT ?1")?;
+        } else {
+            stmt = conn.prepare("SELECT id, body, created_at, user_id FROM post ORDER BY id DESC LIMIT ?1")?;
+        }
+        
+        let post_iter = stmt.query_map(params![num, user_id], |row| {
             Ok(PostDetails {
-                body: row.get(0)?,
-                created_at: row.get::<_, NaiveDateTime>(1)?.timestamp(),
-                user_id: row.get(2)?
+                id: row.get(0)?,
+                body: row.get(1)?,
+                created_at: row.get::<_, NaiveDateTime>(2)?.timestamp(),
+                user_id: row.get(3)?
             })
         })?;
 
@@ -334,6 +348,7 @@ struct PostInfo {
 /// Web client receives this to display posts
 #[derive(Serialize, Deserialize)]
 struct PostDetails {
+    id: u32,
     body: String,
     created_at: i64,
     user_id: u32
@@ -380,11 +395,27 @@ fn user_info(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Json<Us
     Ok(Json(user.into()))
 }
 
+/// Returns details about recent n recent posts for the given user id
+#[get("/recent-posts/<req_user_id>/<n>")]
+fn recent_posts(_user: User, db: State<DbConn>, req_user_id: u32, n: u32) -> Result<Json<Vec<PostDetails>>, Error> {
+    let conn = db.lock().unwrap();
+    let posts = Post::load_recents_info(&conn, n, Some(req_user_id))?;
+
+    Ok(Json(posts))
+}
+
 /// Returns the profile picture for the requested user id
 #[get("/profile-pic/<req_user_id>")]
 fn profile_pic(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Content<Vec<u8>>, Error> {
     let conn = db.lock().unwrap();
     Ok(Content(ContentType::PNG, User::get_profile_pic(&conn, req_user_id)?))
+}
+
+/// Returns the image for the requested post id
+#[get("/post-image/<post_id>")]
+fn post_image(_user: User, db: State<DbConn>, post_id: u32) -> Result<Content<Vec<u8>>, Error> {
+    let conn = db.lock().unwrap();
+    Ok(Content(ContentType::JPEG, Post::get_image(&conn, post_id)?))
 }
 
 /// Creates a post for whatever user makes the request using the provided post
@@ -404,7 +435,7 @@ fn create_post(user: User, db: State<DbConn>, post_info: Json<PostInfo>) -> Resu
 // being flat
 //
 // for example /api/post/<id>/image/set instead of /api/set-post-image/<id>
-#[post("/set-post-image/<post_id>", format = "plain", data = "<data>")]
+#[post("/set-post-image/<post_id>", format = "binary", data = "<data>")]
 fn set_post_image(_user: User, db: State<DbConn>, data: Data, post_id: u32) -> Result<(), Error> {
     let conn = db.lock().unwrap();
     let mut data_buf = vec![];
@@ -511,7 +542,9 @@ fn rocket(conn: Connection) -> Result<rocket::Rocket, Error> {
                 profile_pic,
                 user_info,
                 create_post,
-                set_post_image
+                set_post_image,
+                post_image,
+                recent_posts
             ])
             .register(catchers![not_found])
     )
@@ -683,7 +716,7 @@ mod test {
         let response = client
             .post("/api/set-post-image/1")
             .cookie(login_cookie.clone())
-            .header(ContentType::Plain)
+            .header(ContentType::Binary)
             .body(&favicon_buf)
             .dispatch();
         assert_eq!(response.status(), Status::Ok);
