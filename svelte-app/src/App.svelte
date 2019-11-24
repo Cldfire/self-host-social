@@ -7,6 +7,7 @@
     import Login from './Login.svelte';
     import UserProfile from './UserProfile.svelte';
     import NewPost from './NewPost.svelte';
+    import Search from './Search.svelte';
     import { signedIn, userId } from './stores.js';
 
     onMount(async () => {
@@ -33,6 +34,7 @@
     <Route path="/login" component={Login}/>
     <Route path="/new-post" component={NewPost}/>
     <Route path="/user/:userId" component={UserProfile}/>
+    <Route path="/search" component={Search}/>
     <!-- TODO: Figure out how to set up a wildcard path. Right now entering a
     non-existent path results in a network request, but that shouldn't occur -->
 </Router>

@@ -33,6 +33,7 @@
 
     <Link href="user/{$userId}">View Profile</Link>
     <Link href="new-post">New Post</Link>
+    <Link href="search">Search Posts</Link>
     <button on:click="{logOut}">Log Out</button>
 
     <h2>Recent Posts</h2>

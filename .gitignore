@@ -2,3 +2,4 @@ target
 .DS_store
 db.db3
 .vscode
+search_index

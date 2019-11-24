@@ -17,6 +17,7 @@ extern crate tantivy;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
+use tantivy::directory::MmapDirectory;
 use tantivy::{Index, ReloadPolicy, IndexWriter, IndexReader};
 
 use argonautica::{Hasher, Verifier};
@@ -43,6 +44,7 @@ enum Error {
     DatabaseErr(rusqlite::Error),
     SearchErr(tantivy::Error),
     QueryParseErr(tantivy::query::QueryParserError),
+    OpenDirectoryErr(tantivy::directory::error::OpenDirectoryError),
     /// Error returned when an attempt is made to create a new user with a real
     /// name or email address that already exists in the database.
     UserAlreadyExists,
@@ -74,6 +76,12 @@ impl From<tantivy::Error> for Error {
 impl From<tantivy::query::QueryParserError> for Error {
     fn from(err: tantivy::query::QueryParserError) -> Self {
         Error::QueryParseErr(err)
+    }
+}
+
+impl From<tantivy::directory::error::OpenDirectoryError> for Error {
+    fn from(err: tantivy::directory::error::OpenDirectoryError) -> Self {
+        Error::OpenDirectoryErr(err)
     }
 }
 
@@ -482,8 +490,6 @@ fn search_posts(
     let query_parser = QueryParser::for_index(searcher.index(), vec![body_field]);
     let mut posts = vec![];
 
-    dbg!(&query_string);
-
     let query = query_parser.parse_query(&query_string)?;
     let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
 
@@ -677,13 +683,14 @@ fn rocket(conn: Connection, index: Index, schema: Schema) -> Result<rocket::Rock
 }
 
 fn main() -> Result<(), Error> {
+    let index_dir = MmapDirectory::open(concat!(env!("CARGO_MANIFEST_DIR"), "/search_index"))?;
     let search_schema = init_search_schema();
 
     // TODO: more configurable database persistence?
     // rocket pretty prints the error when it drops if one occurs
     let _ = rocket(
         Connection::open(concat!(env!("CARGO_MANIFEST_DIR"), "/db.db3"))?,
-        Index::create_in_dir(env!("CARGO_MANIFEST_DIR"), search_schema.clone())?,
+        Index::open_or_create(index_dir, search_schema.clone())?,
         search_schema
     )?.launch();
 
@@ -920,7 +927,6 @@ mod test {
             .dispatch();
 
         let response_json = response.body_string().unwrap();
-        dbg!(&response_json);
         let search_results: Vec<PostDetails> = serde_json::from_str(&response_json).unwrap();
 
         assert!(
