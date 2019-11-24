@@ -12,6 +12,13 @@ use rocket::State;
 use rocket_contrib::json::Json;
 use rocket_contrib::serve::StaticFiles;
 
+#[macro_use]
+extern crate tantivy;
+use tantivy::collector::TopDocs;
+use tantivy::query::QueryParser;
+use tantivy::schema::*;
+use tantivy::{Index, ReloadPolicy, IndexWriter, IndexReader};
+
 use argonautica::{Hasher, Verifier};
 use chrono::{NaiveDateTime, Utc};
 use rusqlite::{params, Connection};
@@ -29,11 +36,13 @@ type DbConn = Mutex<Connection>;
 const SECRET_KEY: &str = "TODO: HANDLE SECRET KEY";
 
 /// The error type used throughout the binary
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 enum Error {
     /// An error encountered while working with password hashes
     HashError(argonautica::Error),
     DatabaseErr(rusqlite::Error),
+    SearchErr(tantivy::Error),
+    QueryParseErr(tantivy::query::QueryParserError),
     /// Error returned when an attempt is made to create a new user with a real
     /// name or email address that already exists in the database.
     UserAlreadyExists,
@@ -53,6 +62,18 @@ impl From<argonautica::Error> for Error {
 impl From<rusqlite::Error> for Error {
     fn from(err: rusqlite::Error) -> Self {
         Error::DatabaseErr(err)
+    }
+}
+
+impl From<tantivy::Error> for Error {
+    fn from(err: tantivy::Error) -> Self {
+        Error::SearchErr(err)
+    }
+}
+
+impl From<tantivy::query::QueryParserError> for Error {
+    fn from(err: tantivy::query::QueryParserError) -> Self {
+        Error::QueryParseErr(err)
     }
 }
 
@@ -250,15 +271,39 @@ impl Post {
     }
 
     /// Inserts a new post into the database based on the given post info and user id.
+    /// 
+    /// Also adds the post to the search index.
     // TODO: remove that requirement when Rocket gets multipart form support
-    fn create_new(conn: &Connection, pinfo: &PostInfo, user_id: u32) -> Result<(), Error> {
-        let created_at = Utc::now().naive_utc();
+    fn create_new(
+        conn: &Connection,
+        index_writer: &mut IndexWriter,
+        schema: &Schema,
+        pinfo: &PostInfo,
+        user_id: u32
+    ) -> Result<(), Error> {
+        let created_at = Utc::now();
+        let body_field = schema.get_field("body").unwrap();
+        let post_id_field = schema.get_field("post_id").unwrap();
+        let user_id_field = schema.get_field("user_id").unwrap();
+        let created_at_field = schema.get_field("created_at").unwrap();
 
-        Ok(conn.execute(
+        conn.execute(
             "INSERT INTO post (body, created_at, user_id)
                     VALUES (?1, ?2, ?3)",
-            params![pinfo.body, created_at, user_id],
-        ).map(|_| ())?)
+            params![pinfo.body, created_at.naive_utc(), user_id],
+        )?;
+
+        index_writer.add_document(doc!(
+            body_field => pinfo.body.clone(),
+            post_id_field => conn.last_insert_rowid() as u64,
+            user_id_field => user_id as u64,
+            // TODO: is inserting datetime here rather than naivedatetime going to cause issues?
+            created_at_field => created_at
+        ));
+
+        index_writer.commit()?;
+
+        Ok(())
     }
 
     /// Set the image of the post specified by the given id to the given image data.
@@ -358,6 +403,17 @@ struct PostDetails {
     user_id: u32
 }
 
+impl From<Post> for PostDetails {
+    fn from(post: Post) -> Self {
+        Self {
+            id: post.id,
+            body: post.body,
+            created_at: post.created_at.timestamp(),
+            user_id: post.user_id
+        }
+    }
+}
+
 /// Web client receives this after creating a post
 #[derive(Serialize, Deserialize)]
 struct PostCreationResponse {
@@ -410,6 +466,39 @@ fn recent_posts(_user: User, db: State<DbConn>, req_user_id: Option<u32>, n: u32
     Ok(Json(posts))
 }
 
+/// Searches post bodies using the given query and returns the top 10 results
+#[get("/search-posts?<query_string>")]
+fn search_posts(
+    _user: User,
+    db: State<DbConn>,
+    reader: State<IndexReader>,
+    schema: State<Schema>,
+    query_string: String
+) -> Result<Json<Vec<PostDetails>>, Error> {
+    let conn = db.lock().unwrap();
+    let searcher = reader.searcher();
+    let body_field = schema.get_field("body").unwrap();
+    let post_id_field = schema.get_field("post_id").unwrap();
+    let query_parser = QueryParser::for_index(searcher.index(), vec![body_field]);
+    let mut posts = vec![];
+
+    dbg!(&query_string);
+
+    let query = query_parser.parse_query(&query_string)?;
+    let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
+
+    for (_score, doc_address) in top_docs {
+        let retrieved_doc = searcher.doc(doc_address)?;
+        // TODO: every time we load a post here we're loading the whole image into
+        // memory as well. ew.
+        let post = Post::load_id(&conn, retrieved_doc.get_first(post_id_field).unwrap().u64_value() as u32)?;
+
+        posts.push(post.into());
+    }
+
+    Ok(Json(posts))
+}
+
 /// Returns the profile picture for the requested user id
 #[get("/profile-pic/<req_user_id>")]
 fn profile_pic(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Content<Vec<u8>>, Error> {
@@ -430,9 +519,16 @@ fn post_image(_user: User, db: State<DbConn>, post_id: u32) -> Result<Content<Ve
 ///
 /// Returns the post's id upon successful creation.
 #[post("/create-post", format = "json", data = "<post_info>")]
-fn create_post(user: User, db: State<DbConn>, post_info: Json<PostInfo>) -> Result<status::Created<Json<PostCreationResponse>>, Error> {
+fn create_post(
+    user: User,
+    db: State<DbConn>,
+    index_writer: State<Mutex<IndexWriter>>,
+    schema: State<Schema>,
+    post_info: Json<PostInfo>
+) -> Result<status::Created<Json<PostCreationResponse>>, Error> {
     let conn = db.lock().unwrap();
-    Post::create_new(&conn, &post_info, user.user_id)?;
+    let mut index_writer = index_writer.lock().unwrap();
+    Post::create_new(&conn, &mut index_writer, &schema, &post_info, user.user_id)?;
 
     Ok(status::Created("".to_string(), Some(Json(PostCreationResponse { post_id: conn.last_insert_rowid() as u32 }))))
 }
@@ -531,13 +627,33 @@ fn init_database(conn: &Connection) -> Result<(), Error> {
     Post::create_table(conn)
 }
 
+/// Builds and returns the search schema.
+fn init_search_schema() -> Schema {
+    let mut schema_builder = Schema::builder();
+
+    schema_builder.add_text_field("body", TEXT);
+    schema_builder.add_u64_field("post_id", INDEXED | STORED);
+    schema_builder.add_u64_field("user_id", INDEXED);
+    schema_builder.add_date_field("created_at", INDEXED);
+
+    schema_builder.build()
+}
+
 /// Create a Rocket instance managing the given database connection
-fn rocket(conn: Connection) -> Result<rocket::Rocket, Error> {
+fn rocket(conn: Connection, index: Index, schema: Schema) -> Result<rocket::Rocket, Error> {
     init_database(&conn)?;
 
     Ok(
         rocket::ignite()
+            // TODO: use an rwlock here?
             .manage(Mutex::new(conn))
+            // search index writer with 50 MB heap
+            .manage(Mutex::new(index.writer(50_000_000)?))
+            .manage(index.reader_builder()
+                .reload_policy(ReloadPolicy::OnCommit)
+                .try_into()?
+            )
+            .manage(schema)
             // TODO: bundle static files into binary for easy deploy?
             // TODO: make a crate to manage boilerplate for serving static files from
             // a hashmap generated at compile time?
@@ -553,17 +669,22 @@ fn rocket(conn: Connection) -> Result<rocket::Rocket, Error> {
                 create_post,
                 set_post_image,
                 post_image,
-                recent_posts
+                recent_posts,
+                search_posts
             ])
             .register(catchers![not_found])
     )
 }
 
 fn main() -> Result<(), Error> {
+    let search_schema = init_search_schema();
+
     // TODO: more configurable database persistence?
     // rocket pretty prints the error when it drops if one occurs
     let _ = rocket(
-        Connection::open(concat!(env!("CARGO_MANIFEST_DIR"), "/db.db3"))?
+        Connection::open(concat!(env!("CARGO_MANIFEST_DIR"), "/db.db3"))?,
+        Index::create_in_dir(env!("CARGO_MANIFEST_DIR"), search_schema.clone())?,
+        search_schema
     )?.launch();
 
     Ok(())
@@ -676,7 +797,9 @@ mod test {
         let res = User::load_id(&conn, 1);
 
         // error should be "QueryReturnedNoRows"
-        assert_eq!(res, Err(Error::DatabaseErr(rusqlite::Error::QueryReturnedNoRows)));
+        // TODO: re-add this more precise test with some sort of assert_matches
+        // assert_eq!(res, Err(Error::DatabaseErr(rusqlite::Error::QueryReturnedNoRows)));
+        assert!(res.is_err());
         Ok(())
     }
 
@@ -689,7 +812,9 @@ mod test {
         let password = "myAmazingPassw0rd!".to_string();
         create_dummy_user(&conn, email.clone(), password.clone())?;
 
-        let client = Client::new(rocket(conn)?).unwrap();
+        let schema = init_search_schema();
+
+        let client = Client::new(rocket(conn, Index::create_in_ram(schema.clone()), schema)?).unwrap();
         let db = client.rocket().state::<DbConn>().unwrap();
         let login_cookie = login(&client, email, password).expect("logged in");
 
@@ -737,6 +862,86 @@ mod test {
         // The image gets upscaled and re-encoded to JPEG by the server, so it
         // should be significantly larger now
         assert!(post.image.unwrap().len() > favicon_buf.len());
+
+        Ok(())
+    }
+
+    #[test]
+    fn search_posts() -> Result<(), Error> {
+        let conn = Connection::open_in_memory()?;
+        init_database(&conn)?;
+
+        let email = "some_email@gmail.com".to_string();
+        let password = "myAmazingPassw0rd!".to_string();
+        create_dummy_user(&conn, email.clone(), password.clone())?;
+
+        let schema = init_search_schema();
+
+        let client = Client::new(rocket(conn, Index::create_in_ram(schema.clone()), schema)?).unwrap();
+        let login_cookie = login(&client, email, password).expect("logged in");
+
+        let body_1 = "Unicorns are amazing!!!".to_string();
+        let body_2 = "Pink is the best color on the planet".to_string();
+        let body_3 = "Rokt leeg is best video game".to_string();
+        let body_4 = "Bunnies are pretty cool too I guess".to_string();
+        let body_5 = "But did I mention unicorns are amazing?!?!?!?".to_string();
+
+        let post_infos = vec![
+            PostInfo {
+                body: body_1.clone(),
+            },
+            PostInfo {
+                body: body_2.clone(),
+            },
+            PostInfo {
+                body: body_3.clone(),
+            },
+            PostInfo {
+                body: body_4.clone(),
+            },
+            PostInfo {
+                body: body_5.clone()
+            }
+        ];
+
+        for post_info in post_infos {
+            let response = client
+                .post("/api/create-post")
+                .cookie(login_cookie.clone())
+                .header(ContentType::JSON)
+                .body(serde_json::to_string(&post_info).unwrap())
+                .dispatch();
+                assert_eq!(response.status(), Status::Created);
+        }
+
+        let mut response = client
+            .get("/api/search-posts?query_string=unicorns")
+            .cookie(login_cookie.clone())
+            .dispatch();
+
+        let response_json = response.body_string().unwrap();
+        dbg!(&response_json);
+        let search_results: Vec<PostDetails> = serde_json::from_str(&response_json).unwrap();
+
+        assert!(
+            &search_results[0].body == &body_1 ||
+            &search_results[1].body == &body_1
+        );
+
+        assert!(
+            &search_results[0].body == &body_5 ||
+            &search_results[1].body == &body_5
+        );
+
+        let mut response = client
+            .get("/api/search-posts?query_string=rokt+leeg")
+            .cookie(login_cookie.clone())
+            .dispatch();
+
+        let response_json = response.body_string().unwrap();
+        let search_results: Vec<PostDetails> = serde_json::from_str(&response_json).unwrap();
+
+        assert!(&search_results[0].body == &body_3);
 
         Ok(())
     }
