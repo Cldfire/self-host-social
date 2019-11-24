@@ -8,6 +8,8 @@
 
     // TODO: this attempts to load posts even when not signed in
     var recentPostsPromise = loadRecentPosts(null, 15);
+    // TODO: same here
+    var allUsersPromise = loadAllUserInfo();
 
     async function logOut() {
         const response = await fetch(
@@ -26,9 +28,33 @@
             alert("login failed");
         }
     }
+
+    async function loadAllUserInfo() {
+        var response = await fetch(
+            "/api/users",
+            {
+                method: 'GET',
+                credentials: 'same-origin'
+            }
+        );
+
+        if (response.ok) {
+            return response.json();
+        } else {
+            // TODO:
+            return {};
+	    }
+    }
 </script>
 
 {#if $signedIn}
+    {#await allUsersPromise then users}
+        {#each users as user}
+            <Link href="user/{user.user_id}">
+                <img alt="profile picture" src="/api/profile-pic/{user.user_id}" height=35>
+            </Link>
+        {/each}
+    {/await}
     <p>Hi! You are signed in.</p>
 
     <Link href="user/{$userId}">View Profile</Link>

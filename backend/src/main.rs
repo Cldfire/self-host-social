@@ -215,6 +215,27 @@ impl User {
         ).map(|_| ())?)
     }
 
+    /// Loads and returns all users
+    fn load_all(conn: &Connection) -> Result<Vec<Self>, Error> {
+        let mut stmt = conn.prepare("SELECT user_id, hash, email, created_at, display_name, real_name, profile_pic FROM user")?;
+        let user_iter = stmt.query_map(params![], |row| {
+            Ok(User {
+                user_id: row.get(0)?,
+                hash: row.get(1)?,
+                email: row.get(2)?,
+                created_at: row.get(3)?,
+                display_name: row.get(4)?,
+                real_name: row.get(5)?,
+                profile_pic: row.get(6)?
+            })
+        })?;
+
+        user_iter.map(|res| match res {
+            Ok(v) => Ok(v),
+            Err(e) => Err(Error::from(e))
+        }).collect()
+    }
+
     /// Loads the user specified by the given id from the database.
     fn load_id(conn: &Connection, user_id: u32) -> Result<Self, Error> {
         Ok(conn.query_row(
@@ -504,6 +525,15 @@ fn user_info(_user: User, db: State<DbConn>, req_user_id: u32) -> Result<Json<Us
     Ok(Json(user.into()))
 }
 
+/// Returns information about all registered users
+#[get("/users")]
+fn users(_user: User, db: State<DbConn>) -> Result<Json<Vec<UserInfo>>, Error> {
+    let conn = db.lock().unwrap();
+    let users = User::load_all(&conn)?;
+
+    Ok(Json(users.into_iter().map(|u| u.into()).collect()))
+}
+
 /// Returns details about recent n recent posts for the given user id
 // TODO: use query parameters more, they're more idiomatic
 // also show up nicer in the network panel
@@ -738,6 +768,7 @@ fn rocket(conn: Connection, index: Index, schema: Schema) -> Result<rocket::Rock
                 me_authed,
                 profile_pic,
                 user_info,
+                users,
                 create_post,
                 set_post_image,
                 post_image,

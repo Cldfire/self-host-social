@@ -30,7 +30,7 @@
 
 
 {#await userInfoPromise then userInfo}
-    <img alt="profile picture" src="/api/profile-pic/{router.params.userId}" height=100 width=100>
+    <img alt="profile picture" src="/api/profile-pic/{router.params.userId}" height=100>
 
     <h3>{userInfo.displayName}</h3>
     <p>{userInfo.realName}</p>
