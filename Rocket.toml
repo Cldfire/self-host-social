@@ -1,2 +1,3 @@
 [development]
 secret_key = "Wv5lsWH+fy+9auAREsxYqL+ZchSIMRK9yZUm5Oszs3c="
+argon_secret_key = "jCkreOrEvbftVfw/hWaQVi3TVDTxTUNYbkU6tU/U8c0="

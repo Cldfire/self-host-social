@@ -7,6 +7,7 @@ use rocket::response::{Content, NamedFile};
 use rocket::response::status;
 use rocket::request::{self, FromRequest, Request};
 use rocket::http::{Cookie, Cookies, ContentType};
+use rocket::fairing::AdHoc;
 use rocket::Data;
 use rocket::State;
 use rocket_contrib::json::Json;
@@ -31,10 +32,24 @@ use identicon_rs::{Identicon, ImageType};
 use std::sync::Mutex;
 use std::path::Path;
 use std::io::Read;
+use std::fs::create_dir;
 
 type DbConn = Mutex<Connection>;
+struct ArgonSecretKey(String);
 
-const SECRET_KEY: &str = "TODO: HANDLE SECRET KEY";
+#[cfg(feature = "deployable")]
+macro_rules! root_dir {
+    () => {
+        "./"
+    };
+}
+
+#[cfg(not(feature = "deployable"))]
+macro_rules! root_dir {
+    () => {
+        env!("CARGO_MANIFEST_DIR")
+    };
+}
 
 /// The error type used throughout the binary
 #[derive(Debug)]
@@ -45,6 +60,7 @@ enum Error {
     SearchErr(tantivy::Error),
     QueryParseErr(tantivy::query::QueryParserError),
     OpenDirectoryErr(tantivy::directory::error::OpenDirectoryError),
+    IoErr(std::io::Error),
     /// Error returned when an attempt is made to create a new user with a real
     /// name or email address that already exists in the database.
     UserAlreadyExists,
@@ -82,6 +98,12 @@ impl From<tantivy::query::QueryParserError> for Error {
 impl From<tantivy::directory::error::OpenDirectoryError> for Error {
     fn from(err: tantivy::directory::error::OpenDirectoryError) -> Self {
         Error::OpenDirectoryErr(err)
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IoErr(err)
     }
 }
 
@@ -153,15 +175,17 @@ impl User {
     }
 
     /// Inserts a new user into the database based on the given registration info.
+    /// 
+    /// The `key` parameter is the secret key given to argon for hashing
     ///
     /// Errors if the user cannot be created.
     // TODO: error if user already exists with same realname or email
     // TODO: validate email server-side
-    fn create_new(conn: &Connection, rinfo: &RegisterInfo) -> Result<(), Error> {
+    fn create_new(conn: &Connection, rinfo: &RegisterInfo, key: &str) -> Result<(), Error> {
         let mut hasher = Hasher::default();
         let hash = hasher
             .with_password(&rinfo.password)
-            .with_secret_key(SECRET_KEY)
+            .with_secret_key(key)
             .hash()
             .unwrap();
         let created_at = Utc::now().naive_utc();
@@ -236,14 +260,16 @@ impl User {
     ///
     /// This means that the emails are equivalent and the password the user
     /// entered hashed to the correct value.
-    fn auth(&self, login_info: &LoginInfo) -> Result<bool, Error> {
+    /// 
+    /// The `key` parameter is the secret key given to argon for hashing
+    fn auth(&self, login_info: &LoginInfo, key: &str) -> Result<bool, Error> {
         let mut verifier = Verifier::default();
         Ok(
             login_info.email == self.email &&
             verifier
                 .with_hash(&self.hash)
                 .with_password(&login_info.password)
-                .with_secret_key(SECRET_KEY)
+                .with_secret_key(key)
                 .verify()?
         )
     }
@@ -568,9 +594,14 @@ fn set_post_image(_user: User, db: State<DbConn>, data: Data, post_id: u32) -> R
 // TODO: right now my error type does not implement responder so returning an error
 // here returns a 500 to the client and logs the error to the console
 #[post("/signup", format = "json", data = "<reg_info>")]
-fn signup(mut cookies: Cookies, reg_info: Json<RegisterInfo>, db: State<DbConn>) -> Result<status::Created<Json<UserInfo>>, Error> {
+fn signup(
+    mut cookies: Cookies,
+    reg_info: Json<RegisterInfo>,
+    db: State<DbConn>,
+    key: State<ArgonSecretKey>
+) -> Result<status::Created<Json<UserInfo>>, Error> {
     let conn = db.lock().unwrap();
-    User::create_new(&conn, &reg_info)?;
+    User::create_new(&conn, &reg_info, &key.0)?;
 
     let user_id = conn.last_insert_rowid() as u32;
     let user_info = UserInfo {
@@ -590,11 +621,16 @@ fn signup(mut cookies: Cookies, reg_info: Json<RegisterInfo>, db: State<DbConn>)
 //
 // should fix that
 #[post("/login", format = "json", data = "<login_info>")]
-fn login(mut cookies: Cookies, login_info: Json<LoginInfo>, db: State<DbConn>) -> Result<status::Accepted<Json<UserInfo>>, Error> {
+fn login(
+    mut cookies: Cookies,
+    login_info: Json<LoginInfo>,
+    db: State<DbConn>,
+    key: State<ArgonSecretKey>
+) -> Result<status::Accepted<Json<UserInfo>>, Error> {
     let conn = db.lock().unwrap();
     let user = User::load_email(&conn, &login_info.email)?;
 
-    if user.auth(&login_info)? {
+    if user.auth(&login_info, &key.0)? {
         cookies.add_private(Cookie::new("user_id", user.user_id.to_string()));
         Ok(status::Accepted(Some(Json(user.into()))))
     } else {
@@ -622,7 +658,7 @@ fn me() -> status::Custom<()> {
 // TODO: perhaps we should still return a 404 for anything that's not a path?
 #[catch(404)]
 fn not_found() -> NamedFile {
-    NamedFile::open(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/svelte-app/public/index.html"))).unwrap()
+    NamedFile::open(Path::new(concat!(root_dir!(), "/svelte-app/public/index.html"))).unwrap()
 }
 
 /// Performs any necessary database setup upon application start.
@@ -649,6 +685,11 @@ fn init_search_schema() -> Schema {
 fn rocket(conn: Connection, index: Index, schema: Schema) -> Result<rocket::Rocket, Error> {
     init_database(&conn)?;
 
+    #[cfg(feature = "deployable")]
+    let static_files_dir = concat!(root_dir!(), "static");
+    #[cfg(not(feature = "deployable"))]
+    let static_files_dir = concat!(root_dir!(), "/svelte-app/public");
+
     Ok(
         rocket::ignite()
             // TODO: use an rwlock here?
@@ -660,10 +701,20 @@ fn rocket(conn: Connection, index: Index, schema: Schema) -> Result<rocket::Rock
                 .try_into()?
             )
             .manage(schema)
+            .attach(AdHoc::on_attach("Assets Config", |rocket| {
+                // TODO: right now this key gets printed by rocket to the console
+                // every time the binary is launched which is kind of annoying
+                let key = rocket.config()
+                    .get_str("argon_secret_key")
+                    .unwrap()
+                    .to_string();
+    
+                Ok(rocket.manage(ArgonSecretKey(key)))
+            }))
             // TODO: bundle static files into binary for easy deploy?
             // TODO: make a crate to manage boilerplate for serving static files from
             // a hashmap generated at compile time?
-            .mount("/", StaticFiles::from(concat!(env!("CARGO_MANIFEST_DIR"), "/svelte-app/public")))
+            .mount("/", StaticFiles::from(static_files_dir))
             .mount("/api", routes![
                 signup,
                 login,
@@ -683,13 +734,18 @@ fn rocket(conn: Connection, index: Index, schema: Schema) -> Result<rocket::Rock
 }
 
 fn main() -> Result<(), Error> {
-    let index_dir = MmapDirectory::open(concat!(env!("CARGO_MANIFEST_DIR"), "/search_index"))?;
+    let search_index_dir = Path::new(concat!(root_dir!(), "/search_index"));
+    if !search_index_dir.exists() {
+        create_dir(&search_index_dir)?;
+    }
+
+    let index_dir = MmapDirectory::open(&search_index_dir)?;
     let search_schema = init_search_schema();
 
     // TODO: more configurable database persistence?
     // rocket pretty prints the error when it drops if one occurs
     let _ = rocket(
-        Connection::open(concat!(env!("CARGO_MANIFEST_DIR"), "/db.db3"))?,
+        Connection::open(concat!(root_dir!(), "/db.db3"))?,
         Index::open_or_create(index_dir, search_schema.clone())?,
         search_schema
     )?.launch();
@@ -728,7 +784,7 @@ mod test {
         user_id_cookie(&response)
     }
 
-    fn create_dummy_user(conn: &Connection, email: String, password: String) -> Result<(), Error> {
+    fn create_dummy_user(conn: &Connection, email: String, password: String, key: String) -> Result<(), Error> {
         let rinfo = RegisterInfo {
             email,
             password,
@@ -736,7 +792,7 @@ mod test {
             real_name: "Some Dummy".to_string()
         };
 
-        User::create_new(&conn, &rinfo)
+        User::create_new(&conn, &rinfo, &key)
     }
 
     #[test]
@@ -783,15 +839,16 @@ mod test {
         let conn = Connection::open_in_memory()?;
         init_database(&conn)?;
 
+        let secret_key = "test secret key";
         let password = "myAmazingPassw0rd!".to_string();
         let email = "some_email@gmail.com".to_string();
-        create_dummy_user(&conn, email.clone(), password.clone())?;
+        create_dummy_user(&conn, email.clone(), password.clone(), secret_key.to_string())?;
 
         let user = User::load_id(&conn, 1)?;
-        assert_eq!(user.auth(&LoginInfo { email: email.clone(), password: password.clone() })?, true);
-        assert_eq!(user.auth(&LoginInfo { email: "adifferentemail@gmail.com".to_string(), password })?, false);
-        assert_eq!(user.auth(&LoginInfo { email: email.clone(), password: "thisisthewrongpassword".to_string() })?, false);
-        assert_eq!(user.auth(&LoginInfo { email: "anotheremail@gmail.com".to_string(), password: "83quhejwdknas".to_string() })?, false);
+        assert_eq!(user.auth(&LoginInfo { email: email.clone(), password: password.clone() }, secret_key)?, true);
+        assert_eq!(user.auth(&LoginInfo { email: "adifferentemail@gmail.com".to_string(), password }, secret_key)?, false);
+        assert_eq!(user.auth(&LoginInfo { email: email.clone(), password: "thisisthewrongpassword".to_string() }, secret_key)?, false);
+        assert_eq!(user.auth(&LoginInfo { email: "anotheremail@gmail.com".to_string(), password: "83quhejwdknas".to_string() }, secret_key)?, false);
 
         Ok(())
     }
@@ -814,15 +871,18 @@ mod test {
     fn create_post_set_image() -> Result<(), Error> {
         let conn = Connection::open_in_memory()?;
         init_database(&conn)?;
-
-        let email = "some_email@gmail.com".to_string();
-        let password = "myAmazingPassw0rd!".to_string();
-        create_dummy_user(&conn, email.clone(), password.clone())?;
-
         let schema = init_search_schema();
 
         let client = Client::new(rocket(conn, Index::create_in_ram(schema.clone()), schema)?).unwrap();
         let db = client.rocket().state::<DbConn>().unwrap();
+        let secret_key = client.rocket().state::<ArgonSecretKey>().unwrap();
+
+        let email = "some_email@gmail.com".to_string();
+        let password = "myAmazingPassw0rd!".to_string();
+        {
+            let conn = db.lock().unwrap();
+            create_dummy_user(&conn, email.clone(), password.clone(), secret_key.0.clone())?;
+        }
         let login_cookie = login(&client, email, password).expect("logged in");
 
         let post_info = PostInfo {
@@ -850,7 +910,7 @@ mod test {
             assert_eq!(post.user_id, 1);
         }
 
-        let mut file = File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/svelte-app/public/favicon.png")).unwrap();
+        let mut file = File::open(concat!(root_dir!(), "/svelte-app/public/favicon.png")).unwrap();
         let mut favicon_buf = vec![];
         file.read_to_end(&mut favicon_buf).unwrap();
 
@@ -877,14 +937,18 @@ mod test {
     fn search_posts() -> Result<(), Error> {
         let conn = Connection::open_in_memory()?;
         init_database(&conn)?;
-
-        let email = "some_email@gmail.com".to_string();
-        let password = "myAmazingPassw0rd!".to_string();
-        create_dummy_user(&conn, email.clone(), password.clone())?;
-
         let schema = init_search_schema();
 
         let client = Client::new(rocket(conn, Index::create_in_ram(schema.clone()), schema)?).unwrap();
+        let db = client.rocket().state::<DbConn>().unwrap();
+        let secret_key = client.rocket().state::<ArgonSecretKey>().unwrap();
+
+        let email = "some_email@gmail.com".to_string();
+        let password = "myAmazingPassw0rd!".to_string();
+        {
+            let conn = db.lock().unwrap();
+            create_dummy_user(&conn, email.clone(), password.clone(), secret_key.0.clone())?;
+        }
         let login_cookie = login(&client, email, password).expect("logged in");
 
         let body_1 = "Unicorns are amazing!!!".to_string();
