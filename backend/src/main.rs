@@ -174,14 +174,29 @@ impl User {
         ).map(|_| ())?)
     }
 
+    /// Checks to see if a user with the given email or real name exists and returns
+    /// true if one does.
+    fn exists(conn: &Connection, email: &str, real_name: &str) -> Result<bool, Error> {
+        let mut stmt1 = conn.prepare("SELECT * FROM user WHERE email=?1")?;
+        let mut stmt2 = conn.prepare("SELECT * FROM user WHERE real_name=?1")?;
+        
+        Ok(
+            stmt1.exists(params![email])? ||
+            stmt2.exists(params![real_name])?
+        )
+    }
+
     /// Inserts a new user into the database based on the given registration info.
     /// 
     /// The `key` parameter is the secret key given to argon for hashing
     ///
     /// Errors if the user cannot be created.
-    // TODO: error if user already exists with same realname or email
     // TODO: validate email server-side
     fn create_new(conn: &Connection, rinfo: &RegisterInfo, key: &str) -> Result<(), Error> {
+        if User::exists(&conn, &rinfo.email, &rinfo.real_name)? {
+            return Err(Error::UserAlreadyExists);
+        }
+
         let mut hasher = Hasher::default();
         let hash = hasher
             .with_password(&rinfo.password)
@@ -701,7 +716,7 @@ fn rocket(conn: Connection, index: Index, schema: Schema) -> Result<rocket::Rock
                 .try_into()?
             )
             .manage(schema)
-            .attach(AdHoc::on_attach("Assets Config", |rocket| {
+            .attach(AdHoc::on_attach("Argon Secret Key", |rocket| {
                 // TODO: right now this key gets printed by rocket to the console
                 // every time the binary is launched which is kind of annoying
                 let key = rocket.config()
@@ -868,6 +883,88 @@ mod test {
     }
 
     #[test]
+    fn create_with_existing_email() -> Result<(), Error> {
+        let conn = Connection::open_in_memory()?;
+        init_database(&conn)?;
+        let secret_key = "test key";
+        let email = "anemail@gmail.com".to_string();
+
+        let register_info_1 = RegisterInfo {
+            email: email.clone(),
+            password: "aofsaff".to_string(),
+            display_name: "name".to_string(),
+            real_name: "realname".to_string()
+        };
+
+        let register_info_2 = RegisterInfo {
+            email: email.clone(),
+            password: "lmzioiofa".to_string(),
+            display_name: "name2".to_string(),
+            real_name: "realname2".to_string()
+        };
+
+        User::create_new(&conn, &register_info_1, secret_key)?;
+        assert!(User::create_new(&conn, &register_info_2, secret_key).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn create_with_existing_real_name() -> Result<(), Error> {
+        let conn = Connection::open_in_memory()?;
+        init_database(&conn)?;
+        let secret_key = "test key";
+        let real_name = "arealname".to_string();
+
+        let register_info_1 = RegisterInfo {
+            email: "someemail@gmail.com".to_string(),
+            password: "aofsaff".to_string(),
+            display_name: "name".to_string(),
+            real_name: real_name.clone()
+        };
+
+        let register_info_2 = RegisterInfo {
+            email: "someotheremail@gmail.com".to_string(),
+            password: "lmzioiofa".to_string(),
+            display_name: "name2".to_string(),
+            real_name: real_name.clone()
+        };
+
+        User::create_new(&conn, &register_info_1, secret_key)?;
+        assert!(User::create_new(&conn, &register_info_2, secret_key).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn create_with_existing_real_name_and_email() -> Result<(), Error> {
+        let conn = Connection::open_in_memory()?;
+        init_database(&conn)?;
+        let secret_key = "test key";
+        let real_name = "arealname".to_string();
+        let email = "someemail@gmail.com".to_string();
+
+        let register_info_1 = RegisterInfo {
+            email: email.clone(),
+            password: "aofsaff".to_string(),
+            display_name: "name".to_string(),
+            real_name: real_name.clone()
+        };
+
+        let register_info_2 = RegisterInfo {
+            email: email.clone(),
+            password: "lmzioiofa".to_string(),
+            display_name: "name2".to_string(),
+            real_name: real_name.clone()
+        };
+
+        User::create_new(&conn, &register_info_1, secret_key)?;
+        assert!(User::create_new(&conn, &register_info_2, secret_key).is_err());
+
+        Ok(())
+    }
+
+    #[test]
     fn create_post_set_image() -> Result<(), Error> {
         let conn = Connection::open_in_memory()?;
         init_database(&conn)?;
@@ -959,16 +1056,16 @@ mod test {
 
         let post_infos = vec![
             PostInfo {
-                body: body_1.clone(),
+                body: body_1.clone()
             },
             PostInfo {
-                body: body_2.clone(),
+                body: body_2.clone()
             },
             PostInfo {
-                body: body_3.clone(),
+                body: body_3.clone()
             },
             PostInfo {
-                body: body_4.clone(),
+                body: body_4.clone()
             },
             PostInfo {
                 body: body_5.clone()
@@ -984,6 +1081,16 @@ mod test {
                 .dispatch();
                 assert_eq!(response.status(), Status::Created);
         }
+
+        // TODO: for some reason tantivy seems to not have fully committed
+        // documents even after the call to commit() returns, despite the call
+        // stating that it is blocking and that all documents are fully
+        // committed when it returns. I'm getting non-deterministic results
+        // when running search queries immediately after commits on arch linux.
+        //
+        // this sleep is a stop-gap for now, I should probably investigate
+        // and report this issue?
+        std::thread::sleep(std::time::Duration::from_millis(10));
 
         let mut response = client
             .get("/api/search-posts?query_string=unicorns")
