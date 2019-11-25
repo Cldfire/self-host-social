@@ -8,6 +8,35 @@
     async function handleSubmit(event) {
         event.target.create.disabled = true;
         const user_page = "/user/" + get_store_value(userId);
+        var creationResponse = {};
+
+        var reader = new FileReader();
+
+        // TODO: when browsers support it, move back to using the far cleaner
+        // Blob.arrayBuffer()
+        //
+        // or get a polyfill working
+        reader.addEventListener("loadend", async function () {
+            const arrayBuf = reader.result;
+
+            const imgResponse = await fetch(
+                "/api/set-post-image/" + creationResponse.post_id,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/octet-stream'
+                    },
+                    credentials: 'same-origin',
+                    body: arrayBuf
+                }
+            );
+
+            if (!imgResponse.ok) {
+                alert("image upload failed");
+            } else {
+                navigateTo(user_page);
+            }
+        }, false);
 
         if(!event.target.checkValidity()) {
             event.target.create.disabled = false;
@@ -32,27 +61,11 @@
             var img = event.target.file.files[0];
 
             if (img) {
-                const creationResponse = await response.json();
-                const arrayBuf = await img.arrayBuffer();
-    
-                const imgResponse = await fetch(
-                    "/api/set-post-image/" + creationResponse.post_id,
-                    {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/octet-stream'
-                        },
-                        credentials: 'same-origin',
-                        body: arrayBuf
-                    }
-                );
-    
-                if (!imgResponse.ok) {
-                    alert("image upload failed");
-                }
+                creationResponse = await response.json();
+                reader.readAsArrayBuffer(img);
+            } else {
+                navigateTo(user_page);
             }
-
-            navigateTo(user_page);
         } else {
             // TODO: handle potential errors / issues
             // should reply with json payload
