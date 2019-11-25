@@ -4,3 +4,4 @@ db.db3
 .vscode
 search_index
 deploy.sh
+.cargo

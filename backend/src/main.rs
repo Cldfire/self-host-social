@@ -295,7 +295,7 @@ impl User {
     ///
     /// This means that the emails are equivalent and the password the user
     /// entered hashed to the correct value.
-    /// 
+    ///
     /// The `key` parameter is the secret key given to argon for hashing
     fn auth(&self, login_info: &LoginInfo, key: &str) -> Result<bool, Error> {
         let mut verifier = Verifier::default();

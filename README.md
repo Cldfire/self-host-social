@@ -26,9 +26,12 @@ After that's done:
 Right now the deploy process is as follows:
 
 * Run `npm run build` from the `svelte-app` folder
-* Build a deployable binary with `cargo run --release --features deployable`
+* Build a deployable binary with `cargo build --release --features deployable`
     * Note: if you are building for a server with an older `libc` version installed like I am, you'll want to add a `--target x86_64-unknown-linux-musl` to statically link a newer `libc` version
-    * Make sure you have `musl` stuff installed first. On Arch, `sudo pacman -S musl`
+    * Make sure you have `musl` stuff installed first.
+        * Arch: `sudo pacman -S musl`
+        * MacOS: follow the guide [here](https://timryan.org/2018/07/27/cross-compiling-linux-binaries-from-macos.html)
+            * ... but stop before it directs you away from musl ;)
 * Use `scp` to upload this binary to a server somewhere
     * Example: `scp target/x86_64-unknown-linux-musl/release/backend your_username@remotehost.edu:/some/remote/directory/backend`
 * Use `scp` to upload the contents of the `svelte-app/public` folder to a `static` folder next to the binary
