@@ -6,7 +6,11 @@
     import { get_store_value } from 'svelte/internal'
 
     async function handleSubmit(event) {
+        event.target.create.disabled = true;
+        const user_page = "/user/" + get_store_value(userId);
+
         if(!event.target.checkValidity()) {
+            event.target.create.disabled = false;
             return;
         }
 
@@ -25,30 +29,35 @@
         );
 
         if (response.ok) {
-            const creationResponse = await response.json();
-            const arrayBuf = await event.target.file.files[0].arrayBuffer();
+            var img = event.target.file.files[0];
 
-            const imgResponse = await fetch(
-                "/api/set-post-image/" + creationResponse.post_id,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/octet-stream'
-                    },
-                    credentials: 'same-origin',
-                    body: arrayBuf
+            if (img) {
+                const creationResponse = await response.json();
+                const arrayBuf = await img.arrayBuffer();
+    
+                const imgResponse = await fetch(
+                    "/api/set-post-image/" + creationResponse.post_id,
+                    {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/octet-stream'
+                        },
+                        credentials: 'same-origin',
+                        body: arrayBuf
+                    }
+                );
+    
+                if (!imgResponse.ok) {
+                    alert("image upload failed");
                 }
-            );
-
-            if (!imgResponse.ok) {
-                alert("image upload failed");
-            } else {
-                navigateTo("/user/" + get_store_value(userId));
             }
+
+            navigateTo(user_page);
         } else {
             // TODO: handle potential errors / issues
             // should reply with json payload
             alert("creation failed");
+            event.target.create.disabled = false;
         }
     }
 
@@ -74,7 +83,7 @@
     <label for="file">Choose Image</label>
     <input id="file" type="file" on:change="{previewFile}" accept="image/*">
 
-    <button type="submit">Create post</button>
+    <button id="create" type="submit">Create post</button>
 </form>
 
 <img id="preview" src="" width="300" alt="Image preview...">

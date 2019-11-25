@@ -10,7 +10,13 @@ The frontend is in `svelte-app` and is written in JS with the Svelte 3 framework
 
 ## Backend
 
-The backend is in `backend` and is written in Rust. From the repo root:
+The backend is in `backend` and is written in Rust. It requires Rust nightly due to the usage of Rocket. Make sure you have Rust [installed](https://www.rust-lang.org/tools/install), and then do the following from the repo root:
+
+```bash
+rustup set override nightly
+```
+
+After that's done:
 
 * `cargo run` to run the webserver
 * `cargo test` to run tests

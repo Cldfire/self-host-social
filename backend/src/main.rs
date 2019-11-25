@@ -66,7 +66,6 @@ enum Error {
     UserAlreadyExists,
     LoginFailed,
     /// An error occured while trying to launch Rocket
-    RocketLaunchErr,
     /// Placeholder error returned when failure to read uploaded image data occurs
     ImageUploadFailed
 }
@@ -737,7 +736,7 @@ fn rocket(conn: Connection, index: Index, schema: Schema) -> Result<rocket::Rock
 
     Ok(
         rocket::ignite()
-            // TODO: use an rwlock here?
+            // TODO: use a rwlock here?
             .manage(Mutex::new(conn))
             // search index writer with 50 MB heap
             .manage(Mutex::new(index.writer(50_000_000)?))
