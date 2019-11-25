@@ -33,9 +33,9 @@
 
             if (!imgResponse.ok) {
                 alert("image upload failed");
-            } else {
-                navigateTo(user_page);
             }
+
+            navigateTo(user_page);
         }, false);
 
         if(!event.target.checkValidity()) {
