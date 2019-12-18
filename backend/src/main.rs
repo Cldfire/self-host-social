@@ -425,19 +425,22 @@ impl Post {
         let user_id = user_id.unwrap_or(0);
         
         if user_id > 0 {
-            stmt = conn.prepare("SELECT id, body, created_at, user_id FROM post WHERE user_id=?2 ORDER BY id DESC LIMIT ?1")?;
+            stmt = conn.prepare("SELECT id, body, created_at, user_id, image FROM post WHERE user_id=?2 ORDER BY id DESC LIMIT ?1")?;
             params = params![num, user_id].to_vec();
         } else {
-            stmt = conn.prepare("SELECT id, body, created_at, user_id FROM post ORDER BY id DESC LIMIT ?1")?;
+            stmt = conn.prepare("SELECT id, body, created_at, user_id, image FROM post ORDER BY id DESC LIMIT ?1")?;
             params = params![num].to_vec();
         }
         
         let post_iter = stmt.query_map(params, |row| {
+            let image: Option<Vec<u8>> = row.get(4)?;
+
             Ok(PostDetails {
                 id: row.get(0)?,
                 body: row.get(1)?,
                 created_at: row.get::<_, NaiveDateTime>(2)?.timestamp(),
-                user_id: row.get(3)?
+                user_id: row.get(3)?,
+                has_image: image.is_some()
             })
         })?;
 
@@ -469,7 +472,8 @@ struct PostDetails {
     id: u32,
     body: String,
     created_at: i64,
-    user_id: u32
+    user_id: u32,
+    has_image: bool
 }
 
 impl From<Post> for PostDetails {
@@ -478,7 +482,8 @@ impl From<Post> for PostDetails {
             id: post.id,
             body: post.body,
             created_at: post.created_at.timestamp(),
-            user_id: post.user_id
+            user_id: post.user_id,
+            has_image: post.image.is_some()
         }
     }
 }
