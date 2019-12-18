@@ -5,4 +5,7 @@
 </script>
 
 <p>{postInfo.body}</p>
-<img alt="post {postInfo.id} img" src="/api/post-image/{postInfo.id}" width="300">
+
+{#if postInfo.has_image}
+    <img alt="post {postInfo.id} img" src="/api/post-image/{postInfo.id}" width="300">
+{/if}
